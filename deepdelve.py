@@ -45,19 +45,46 @@ class Game:
 
     # ── 动作 ──────────────────────────────────────────────
     def dive(self):
-        cost_o = 10 + self.depth // 3
-        cost_s = 12
+        """下潜的代价带随机：顺流省一截，逆流多花一截。"""
+        base = 7 + self.depth // 4
+        swing = self.rnd.choice([-5, -3, -1, 0, 0, 1, 3, 6, 10])
+        cost_o = max(4, base + swing)
+        # 深处的水压：越深越容易多花一截
+        if self.depth >= 4 and self.rnd.random() < 0.22:
+            extra = 6 + self.depth // 2
+            cost_o += extra
+        cost_s = 12 + self.rnd.randint(-5, 5)
         if self.oxygen <= cost_o or self.stamina < cost_s:
             self.over = True
             self.msg = "氧气不够再下去了。你在原地停住，然后开始上浮。"
             return self.surface(auto=True)
         self.turn += 1
-        self.oxygen -= cost_o
-        self.stamina -= cost_s + self.rnd.randint(-3, 3)
+        warm = None
+        if self.rnd.random() < 0.18:
+            warm = self.rnd.randint(10, 32)
+            self.oxygen = min(100, self.oxygen)
+        self.oxygen = max(0, self.oxygen - cost_o)
+        if warm:
+            self.oxygen = min(100, self.oxygen + warm)
+        self.stamina = max(0, self.stamina - cost_s)
         self.depth += 1
         self.light = max(0, self.light - 12 - self.depth // 2)
         found = self.find()
-        self.msg = f"下潜到第 {self.depth} 层。" + (f" 摸到：{found}" if found else " 这一层很黑，什么都没摸到。")
+
+        if swing <= -2:
+            mood = "一股水流托着你往下，省了不少气"
+        elif swing >= 3:
+            mood = "逆着水流，游得费劲"
+        else:
+            mood = "一路向下"
+        parts = [f"下潜到第 {self.depth} 层（{mood}，氧气 -{cost_o}）"]
+        if warm:
+            parts.append(f"半路撞上一股暖流，居然补回来 {warm} 点气")
+        if found:
+            parts.append(f"摸到：{found}")
+        else:
+            parts.append("这一层很黑，什么都没摸到。")
+        self.msg = "。".join(parts)
 
     def rest(self):
         """海面上能回满；水里歇着只回体力，氧气照旧往下掉——没有白歇的水。"""
