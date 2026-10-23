@@ -248,6 +248,21 @@ class App:
         c.create_text(14, 14, anchor="nw", fill="#9fc7ff",
                       text=f"深度 {g.depth} 层", font=("Microsoft YaHei", 11))
 
+        # 结束：盖一张结算卡
+        if g.over:
+            c.create_rectangle(0, 0, W, H, fill="#02040a", stipple="gray50", outline="")
+            lines = g.summary()
+            y = 34
+            c.create_text(W // 2, y, text="这一趟的账", fill="#9fc7ff",
+                          font=("Microsoft YaHei", 13, "bold"))
+            y += 34
+            for ln in lines:
+                if not ln:
+                    y += 8
+                    continue
+                c.create_text(W // 2, y, text=ln, fill=FG, font=("Microsoft YaHei", 10))
+                y += 22
+
     def redraw(self):
         g = self.g
         lines = [
