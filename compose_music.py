@@ -10,7 +10,20 @@ import numpy as np
 
 SR = 22050
 DUR = 84.0
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music.wav")
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# 三层的音色参数：越深越低、越暗、钟越少
+LAYERS = {
+    "shallow": {"roots": (55.0, 82.5, 110.0), "vols": (0.20, 0.09, 0.06),
+                "bell_at": ((6.0, 220.0), (27.0, 261.6), (48.0, 329.6), (69.0, 220.0)),
+                "noise": 0.05, "dur": 84.0},
+    "mid": {"roots": (49.0, 73.4, 98.0), "vols": (0.22, 0.10, 0.05),
+            "bell_at": ((12.0, 196.0), (46.0, 233.1), (74.0, 174.6)),
+            "noise": 0.07, "dur": 84.0},
+    "deep": {"roots": (41.2, 61.7, 82.4), "vols": (0.26, 0.11, 0.05),
+             "bell_at": ((20.0, 164.8), (62.0, 146.8)),
+             "noise": 0.10, "dur": 84.0},
+}
 
 
 def env_adsr(n, a=0.2, d=0.3, s=0.5, r=0.2):
@@ -60,21 +73,21 @@ def bell(freq, dur=3.0, vol=0.1):
     return sig * np.exp(-2.2 * t) * vol
 
 
-def main():
-    n = int(SR * DUR)
+def build(layer, cfg):
+    n = int(SR * cfg["dur"])
     mix = np.zeros(n)
 
-    # 三层铺底：A1 / E2 / A2，非常低，几乎像风
-    for freq, vol in ((55.0, 0.20), (82.5, 0.09), (110.0, 0.06)):
-        layer = pad(freq, DUR, vol=vol)
-        mix[:len(layer)] += layer[:n]
+    DUR = cfg["dur"]
+    # 三层铺底，非常低，几乎像风
+    for freq, vol in zip(cfg["roots"], cfg["vols"]):
+        sig = pad(freq, DUR, vol=vol)
+        mix[:len(sig)] += sig[:n]
 
     # 水声
-    mix += water_noise(DUR)[:n]
+    mix += water_noise(DUR, cfg["noise"])[:n]
 
     # 偶尔的钟：每 21 秒一次，音高在 A / C / E 之间轮换
-    for i, t0 in enumerate((6.0, 27.0, 48.0, 69.0)):
-        freq = (220.0, 261.6, 329.6, 220.0)[i]
+    for t0, freq in cfg["bell_at"]:
         b = bell(freq, 3.0, 0.09)
         start = int(t0 * SR)
         end = min(n, start + len(b))
@@ -87,12 +100,18 @@ def main():
 
     mix = mix / (np.max(np.abs(mix)) + 1e-9) * 0.85
     data = (np.clip(mix, -1, 1) * 32767).astype("<i2")
-    with wave.open(OUT, "wb") as f:
+    out = os.path.join(HERE, f"music_{layer}.wav")
+    with wave.open(out, "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)
         f.setframerate(SR)
         f.writeframes(data.tobytes())
-    print("music:", OUT, round(DUR, 1), "秒", round(os.path.getsize(OUT) / 1024 / 1024, 1), "MB")
+    print(layer, "->", os.path.basename(out), round(DUR, 1), "秒", round(os.path.getsize(out) / 1024 / 1024, 1), "MB")
+
+
+def main():
+    for layer, cfg in LAYERS.items():
+        build(layer, cfg)
 
 
 if __name__ == "__main__":
