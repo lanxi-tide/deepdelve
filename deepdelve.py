@@ -30,6 +30,7 @@ class Game:
         self.home = []           # 已经带回去的东西
         self.turn = 0
         self.over = False
+        self.stats = {"dives": 0, "rests": 0, "feels": 0, "warm": 0, "against": 0, "with_flow": 0}
         self.msg = ""
 
     # ── 状态 ──────────────────────────────────────────────
@@ -68,6 +69,11 @@ class Game:
             self.oxygen = min(100, self.oxygen + warm)
         self.stamina = max(0, self.stamina - cost_s)
         self.depth += 1
+        self.stats["dives"] += 1
+        if swing <= -2:
+            self.stats["with_flow"] += 1
+        elif swing >= 3:
+            self.stats["against"] += 1
         self.light = max(0, self.light - 12 - self.depth // 2)
         found = self.find()
 
@@ -79,6 +85,7 @@ class Game:
             mood = "一路向下"
         parts = [f"下潜到第 {self.depth} 层（{mood}，氧气 -{cost_o}）"]
         if warm:
+            self.stats["warm"] += 1
             parts.append(f"半路撞上一股暖流，居然补回来 {warm} 点气")
         if found:
             parts.append(f"摸到：{found}")
@@ -89,6 +96,7 @@ class Game:
     def rest(self):
         """海面上能回满；水里歇着只回体力，氧气照旧往下掉——没有白歇的水。"""
         self.turn += 1
+        self.stats["rests"] += 1
         if self.depth == 0:
             self.oxygen = min(100, self.oxygen + 25)
             self.stamina = min(100, self.stamina + 25)
@@ -103,6 +111,7 @@ class Game:
     def feel(self):
         """在水里摸索也要付氧气——摸黑是动作，不是免费扫描。"""
         cost_o = 6 + self.depth // 2
+        self.stats["feels"] += 1
         self.oxygen = max(0, self.oxygen - cost_o)
         self.stamina = max(0, self.stamina - 5)
         self.turn += 1
@@ -159,6 +168,37 @@ class Game:
             return
         if self.oxygen <= 0 or self.stamina <= 0:
             self.over = True
+
+
+    def comment(self):
+        d = self.depth
+        if d >= 14:
+            return "这个深度，连水都开始讲道理了。"
+        if d >= 10:
+            return "深得很稳。你不是运气好，是知道什么时候停。"
+        if d >= 7:
+            return "中规中矩的一趟，够本了。"
+        if d >= 4:
+            return "不敢往下走也没关系，能活着上来的人不多。"
+        return "浅。但你带着东西上来了，这比空手深潜体面。"
+
+    def summary(self):
+        """结算卡片用的几行字。"""
+        st = self.stats
+        spent = st["dives"] + st["rests"] + st["feels"]
+        luck = st["warm"] + st["with_flow"]
+        lines = [
+            f"最深 {self.depth} 层 · 共 {self.turn} 回合 · 动作 {spent} 次",
+            f"下潜 {st['dives']} 次（顺流 {st['with_flow']} · 逆流 {st['against']}）",
+            f"歇气 {st['rests']} 次 · 摸黑 {st['feels']} 次",
+            f"暖流救过你 {st['warm']} 次 · 靠运气占 {int(100 * luck / max(1, spent))}% 的动作",
+            "",
+            "带回来的：" + ("、".join(self.home) if self.home else "什么也没有"),
+            f"剩下的：氧气 {self.oxygen} · 体力 {self.stamina} · 光 {self.light}",
+            "",
+            self.comment(),
+        ]
+        return lines
 
 
 def play(seed=None, script=None):
