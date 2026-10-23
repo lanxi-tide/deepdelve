@@ -74,15 +74,18 @@ class Game:
         self.msg = f"你悬停着回气，体力上来一点，氧气却又少了 {cost}。水底下没有白歇的。"
 
     def feel(self):
-        """在黑暗里摸索：可能拿到东西，也可能白费体力。"""
+        """在水里摸索也要付氧气——摸黑是动作，不是免费扫描。"""
+        cost_o = 6 + self.depth // 2
+        self.oxygen = max(0, self.oxygen - cost_o)
+        self.stamina = max(0, self.stamina - 5)
+        self.turn += 1
         if self.light < 10 and self.rnd.random() < 0.5:
-            self.stamina -= 10
-            self.turn += 1
-            self.msg = "太黑了，你摸到的是自己的尾巴。"
+            self.stamina = max(0, self.stamina - 8)
+            self.msg = f"太黑了，你摸到的是自己的尾巴。氧气 -{cost_o}，体力 -13。"
             return
         found = self.find(bonus=0.25)
-        self.turn += 1
-        self.msg = f"你摸黑找了找：" + (f"摸到 {found}。" if found else "什么也没有。")
+        self.msg = (f"你摸黑找了找：摸到 {found}。氧气 -{cost_o}。" if found
+                    else f"你摸黑找了找：什么也没有。氧气 -{cost_o}。")
 
     def surface(self, auto=False):
         self.home.extend(self.carry)
