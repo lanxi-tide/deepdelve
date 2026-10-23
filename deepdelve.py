@@ -14,9 +14,9 @@ import sys
 WIDTH = 40
 
 
-def bar(value, top, char="▇"):
+def bar(value, top, char="#"):
     n = max(0, min(WIDTH, int(WIDTH * value / top)))
-    return char * n + "·" * (WIDTH - n)
+    return char * n + "." * (WIDTH - n)
 
 
 class Game:
@@ -60,10 +60,18 @@ class Game:
         self.msg = f"下潜到第 {self.depth} 层。" + (f" 摸到：{found}" if found else " 这一层很黑，什么都没摸到。")
 
     def rest(self):
-        self.oxygen = min(100, self.oxygen + 12)
-        self.stamina = min(100, self.stamina + 18)
+        """海面上能回满；水里歇着只回体力，氧气照旧往下掉——没有白歇的水。"""
         self.turn += 1
-        self.msg = "你悬停了一会儿，氧气和体力回了一点。深海不会等你。"
+        if self.depth == 0:
+            self.oxygen = min(100, self.oxygen + 25)
+            self.stamina = min(100, self.stamina + 25)
+            self.msg = "你在海面上浮了一会儿，氧气和体力都回满。"
+            return
+        cost = 4 + self.depth // 2
+        self.oxygen = max(0, self.oxygen - cost)
+        self.stamina = min(100, self.stamina + 16)
+        self.turn += 0
+        self.msg = f"你悬停着回气，体力上来一点，氧气却又少了 {cost}。水底下没有白歇的。"
 
     def feel(self):
         """在黑暗里摸索：可能拿到东西，也可能白费体力。"""
@@ -141,7 +149,7 @@ def play(seed=None, script=None):
                 key = "s"
         g.step(key)
         out.append(g.msg)
-        out.append("─" * WIDTH)
+        out.append("-" * WIDTH)
     out.append(g.status())
     out.append("")
     out.append(f"最深到过第 {g.depth} 层，一共带回 {len(g.home)} 件东西。")
