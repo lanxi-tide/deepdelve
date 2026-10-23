@@ -19,6 +19,21 @@ def bar(value, top, char="#"):
     return char * n + "." * (WIDTH - n)
 
 
+ITEMS = {
+    "一枚旧硬币": ("纪念品", 1),
+    "会发光的鳞": ("纪念品", 2),
+    "沉船的木片": ("纪念品", 1),
+    "半张潮汐图": ("有用的", 4),
+    "别人的记忆碎片": ("有用的", 5),
+    "一颗不冷的星": ("稀有的", 9),
+    "关于深处的谣传": ("稀有的", 12),
+    "一条回声": ("稀有的", 14),
+}
+SHALLOW = ["一枚旧硬币", "会发光的鳞", "沉船的木片"]
+MID = ["半张潮汐图", "别人的记忆碎片", "会发光的鳞"]
+DEEP = ["一颗不冷的星", "关于深处的谣传", "一条回声", "别人的记忆碎片"]
+
+
 class Game:
     def __init__(self, seed=None):
         self.rnd = random.Random(seed)
@@ -30,6 +45,7 @@ class Game:
         self.home = []           # 已经带回去的东西
         self.turn = 0
         self.over = False
+        self.last_empty = False
         self.stats = {"dives": 0, "rests": 0, "feels": 0, "warm": 0, "against": 0, "with_flow": 0}
         self.msg = ""
 
@@ -48,10 +64,10 @@ class Game:
     def dive(self):
         """下潜的代价带随机：顺流省一截，逆流多花一截。"""
         base = 7 + self.depth // 4
-        swing = self.rnd.choice([-5, -3, -1, 0, 0, 1, 3, 6, 10])
+        swing = self.rnd.choice([-3, -1, 0, 0, 0, 1, 2, 4, 6])
         cost_o = max(4, base + swing)
         # 深处的水压：越深越容易多花一截
-        if self.depth >= 4 and self.rnd.random() < 0.22:
+        if self.depth >= 4 and self.rnd.random() < 0.18:
             extra = 6 + self.depth // 2
             cost_o += extra
         cost_s = 12 + self.rnd.randint(-5, 5)
@@ -61,8 +77,8 @@ class Game:
             return self.surface(auto=True)
         self.turn += 1
         warm = None
-        if self.rnd.random() < 0.18:
-            warm = self.rnd.randint(10, 32)
+        if self.rnd.random() < 0.15:
+            warm = self.rnd.randint(8, 26)
             self.oxygen = min(100, self.oxygen)
         self.oxygen = max(0, self.oxygen - cost_o)
         if warm:
@@ -124,20 +140,35 @@ class Game:
                     else f"你摸黑找了找：什么也没有。氧气 -{cost_o}。")
 
     def surface(self, auto=False):
-        self.home.extend(self.carry)
+        lost = []
+        if auto and self.carry:
+            # 被水流推上去：东西掉一半（向上取整，至少一件）
+            n_lost = max(1, (len(self.carry) + 1) // 2)
+            idx = sorted(self.rnd.sample(range(len(self.carry)), n_lost), reverse=True)
+            for i in idx:
+                lost.append(self.carry.pop(i))
         got = list(self.carry)
+        self.home.extend(got)
         self.carry = []
         self.turn += 1
         self.over = True
-        self.msg = ("氧气耗尽，你被水流推了上去。" if auto else "你决定上浮。") + \
-                   ("这趟带回：" + "、".join(got) if got else "这趟什么都没带回来。")
+        head = "氧气耗尽，你被水流推了上去。" if auto else "你决定上浮。"
+        if auto and lost:
+            tail = "水冲得太急，掉了 " + "、".join(lost) + "，只带回：" + ("、".join(got) if got else "什么也没有")
+        else:
+            tail = "这趟带回：" + "、".join(got) if got else "这趟什么都没带回来。"
+        self.msg = head + tail
 
     def find(self, bonus=0.0):
-        if self.rnd.random() > 0.45 + bonus - min(0.25, self.depth * 0.01):
+        if self.last_empty:
+            # 上一次摸空，这次不至于再空——连着两次空手最劝退
+            pass
+        elif self.rnd.random() > 0.45 + bonus - min(0.25, self.depth * 0.01):
+            self.last_empty = True
             return None
-        pool = ["一枚旧硬币", "会发光的鳞", "半张潮汐图", "沉船的木片", "别人的记忆碎片", "一颗不冷的星"]
-        if self.depth > 8:
-            pool += ["关于深处的谣传", "一条回声"]
+        self.last_empty = False
+        d = self.depth
+        pool = SHALLOW if d <= 2 else (SHALLOW + MID if d <= 6 else MID + DEEP)
         item = self.rnd.choice(pool)
         if item not in self.carry:
             self.carry.append(item)
@@ -170,6 +201,9 @@ class Game:
             self.over = True
 
 
+    def value(self):
+        return sum(ITEMS.get(x, ("", 0))[1] for x in self.home)
+
     def comment(self):
         d = self.depth
         if d >= 14:
@@ -194,6 +228,7 @@ class Game:
             f"暖流救过你 {st['warm']} 次 · 靠运气占 {int(100 * luck / max(1, spent))}% 的动作",
             "",
             "带回来的：" + ("、".join(self.home) if self.home else "什么也没有"),
+            "这趟值 " + str(self.value()) + " 点 · 图鉴 " + str(len(set(self.home))) + "/" + str(len(ITEMS)),
             f"剩下的：氧气 {self.oxygen} · 体力 {self.stamina} · 光 {self.light}",
             "",
             self.comment(),
