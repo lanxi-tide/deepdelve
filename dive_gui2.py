@@ -164,16 +164,31 @@ class App:
 
         global SOUNDS
         SOUNDS = ensure_sounds()
-        self.music_on = music_start(os.path.join(HERE, "music.wav"))
+        self.layer = None
+        self.music_on = True
+        self.sync_music()
         self.root.after(2000, self.music_tick)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.redraw()
+
+    def layer_of(self, depth):
+        return "shallow" if depth < 5 else ("mid" if depth < 10 else "deep")
+
+    def sync_music(self):
+        """深度换层就换一首；重开则回到最浅那首。"""
+        want = self.layer_of(self.g.depth)
+        if want == getattr(self, "layer", None):
+            return
+        path = os.path.join(HERE, f"music_{want}.wav")
+        if music_start(path):
+            self.layer = want
 
     def music_tick(self):
         """音乐停了就续上，等于循环。"""
         if not self.music_on:
             return
         if mci("status bgm mode") == 0 and _MCI_BUF.value == "stopped":
+            mci("seek bgm to start")
             mci("play bgm")
         self.root.after(3000, self.music_tick)
 
@@ -254,6 +269,7 @@ class App:
             st = "disabled" if g.over or (k in ("f", "s") and g.depth == 0) else "normal"
             b.configure(state=st)
         self.draw_scene()
+        self.sync_music()
 
     def act(self, key):
         if self.g.over:
@@ -275,6 +291,7 @@ class App:
 
     def restart(self):
         self.g = Game(seed=None)
+        self.layer = None
         self.redraw()
 
 
