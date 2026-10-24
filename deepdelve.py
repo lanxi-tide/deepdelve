@@ -50,13 +50,35 @@ class Game:
         self.msg = ""
 
     # ── 状态 ──────────────────────────────────────────────
+    def depth_note(self):
+        """深度不只改数字，也改你看到的东西。"""
+        d = self.depth
+        if d == 0:
+            return "（水面。光在你背后）"
+        if d <= 2:
+            return "（还有太阳的形状）"
+        if d <= 5:
+            return "（蓝色变成一种压力）"
+        if d <= 8:
+            return "（只有你自己发出来的光）"
+        return "（分不清上边是哪边）"
+
+    def blind(self):
+        """光够不够看东西。低于 40 就开始看不清了。"""
+        return self.light < 40
+
     def status(self):
+        if self.blind():
+            carry = f"看不清（大概 {len(self.carry)} 件）" if self.carry else "看不清，像是空的"
+        else:
+            carry = "、".join(self.carry) if self.carry else "空"
+        light_bar = bar(self.light, 100, "~") if self.blind() else bar(self.light, 100)
         return (
-            f"第 {self.turn} 回合 · 深度 {self.depth} 层\n"
+            f"第 {self.turn} 回合 · 深度 {self.depth} 层{self.depth_note()}\n"
             f"氧气 {bar(self.oxygen, 100)}\n"
             f"体力 {bar(self.stamina, 100)}\n"
-            f"光   {bar(self.light, 100)}\n"
-            f"身上：{'、'.join(self.carry) if self.carry else '空'}\n"
+            f"光   {light_bar}" + ("   ← 已经看不清了" if self.blind() else "") + "\n"
+            f"身上：{carry}\n"
             f"带回过：{'、'.join(self.home) if self.home else '还没上浮过'}"
         )
 
@@ -91,7 +113,7 @@ class Game:
         elif swing >= 3:
             self.stats["against"] += 1
         self.light = max(0, self.light - 12 - self.depth // 2)
-        found = self.find()
+        found = self.find(kind="dive")
 
         if swing <= -2:
             mood = "一股水流托着你往下，省了不少气"
@@ -103,7 +125,9 @@ class Game:
         if warm:
             self.stats["warm"] += 1
             parts.append(f"半路撞上一股暖流，居然补回来 {warm} 点气")
-        if found:
+        if found and self.blind():
+            parts.append(f"摸到一样东西（光不够，看不清是什么，只知道是「{found}」的形状）")
+        elif found:
             parts.append(f"摸到：{found}")
         else:
             parts.append("这一层很黑，什么都没摸到。")
@@ -131,15 +155,36 @@ class Game:
         self.oxygen = max(0, self.oxygen - cost_o)
         self.stamina = max(0, self.stamina - 5)
         self.turn += 1
-        if self.light < 10 and self.rnd.random() < 0.5:
+        if self.light < 25 and self.rnd.random() < 0.5:
             self.stamina = max(0, self.stamina - 8)
             self.msg = f"太黑了，你摸到的是自己的尾巴。氧气 -{cost_o}，体力 -13。"
             return
-        found = self.find(bonus=0.25)
+        found = self.find(bonus=0.25, kind="feel")
         self.msg = (f"你摸黑找了找：摸到 {found}。氧气 -{cost_o}。" if found
                     else f"你摸黑找了找：什么也没有。氧气 -{cost_o}。")
 
     def surface(self, auto=False):
+        """上浮不是按钮。深度过 4 层，得挣扎着上去。
+
+        · 主动上浮：每两回合升一层，每回合扣气；有概率被水压拽回一层
+        · 被动上浮（气耗尽）：东西掉一半
+        """
+        struggle = []
+        if not auto and self.depth >= 4:
+            pulled = 0
+            while self.depth > 0:
+                self.turn += 1
+                cost = 5 + self.depth // 3
+                self.oxygen = max(0, self.oxygen - cost)
+                self.stamina = max(0, self.stamina - (4 + self.depth // 3))
+                if self.rnd.random() < 0.2 and self.depth >= 3 and pulled < 2:
+                    pulled += 1
+                    struggle.append(f"在 {self.depth} 层被水压拽回去一格")
+                    self.depth += 1
+                self.depth -= 1
+                if self.oxygen <= 0:
+                    struggle.append("气不够了，最后一段是你自己漂上去的")
+                    break
         lost = []
         if auto and self.carry:
             # 被水流推上去：东西掉一半（向上取整，至少一件）
@@ -147,19 +192,30 @@ class Game:
             idx = sorted(self.rnd.sample(range(len(self.carry)), n_lost), reverse=True)
             for i in idx:
                 lost.append(self.carry.pop(i))
+        elif struggle and self.carry and self.rnd.random() < 0.3:
+            # 挣扎中手一松，掉一件
+            j = self.rnd.randrange(len(self.carry))
+            lost.append(self.carry.pop(j))
+            struggle.append(f"上去的时候手一松，{lost[-1]} 沉回去了")
         got = list(self.carry)
         self.home.extend(got)
         self.carry = []
         self.turn += 1
         self.over = True
         head = "氧气耗尽，你被水流推了上去。" if auto else "你决定上浮。"
+        mid = ("；".join(struggle) + "。") if struggle else ""
         if auto and lost:
             tail = "水冲得太急，掉了 " + "、".join(lost) + "，只带回：" + ("、".join(got) if got else "什么也没有")
         else:
-            tail = "这趟带回：" + "、".join(got) if got else "这趟什么都没带回来。"
-        self.msg = head + tail
+            tail = "这趟带回：" + ("、".join(got) if got else "什么也没有")
+        self.msg = head + mid + tail
 
-    def find(self, bonus=0.0):
+    def find(self, bonus=0.0, kind="dive"):
+        """往下潜和摸黑摸，摸到的东西不是一类。
+
+        · 往下潜：偏向"有用的"和"稀有的"——你在往深处去
+        · 摸黑摸：偏向轻的、旧的、没有方向的东西——你只能碰到身边
+        """
         if self.last_empty:
             # 上一次摸空，这次不至于再空——连着两次空手最劝退
             pass
@@ -168,7 +224,17 @@ class Game:
             return None
         self.last_empty = False
         d = self.depth
-        pool = SHALLOW if d <= 2 else (SHALLOW + MID if d <= 6 else MID + DEEP)
+        if kind == "feel":
+            pool = list(SHALLOW) + ["别人的记忆碎片"]
+            if d >= 4 and self.rnd.random() < 0.3:
+                pool = pool + ["一段深水里的谣"]
+        else:
+            if d <= 2:
+                pool = list(SHALLOW)
+            elif d <= 5:
+                pool = list(MID) + [SHALLOW[0]]
+            else:
+                pool = list(MID) + list(DEEP)
         item = self.rnd.choice(pool)
         if item not in self.carry:
             self.carry.append(item)
