@@ -33,11 +33,99 @@ SHALLOW = ["一枚旧硬币", "会发光的鳞", "沉船的木片"]
 MID = ["半张潮汐图", "别人的记忆碎片", "会发光的鳞"]
 DEEP = ["一颗不冷的星", "关于深处的谣传", "一条回声", "别人的记忆碎片"]
 
+# ── 日记本 ──────────────────────────────────────────────
+# 每件东西都是一句话的原料。带回什么，就写得出什么。
+ITEM_LINES = {
+    "一枚旧硬币": "摸到一枚旧硬币，边缘被水磨圆了。不知道是谁掉的，也不知道它在这儿躺了多久。",
+    "会发光的鳞": "一片会发光的鳞，离开水以后还亮了一会儿，像谁临走前没关灯。",
+    "沉船的木片": "一块沉船的木片，摸上去还是干的——怎么可能还是干的。",
+    "半张潮汐图": "半张潮汐图，另一半不知道在谁手里。照着它走，能到的地方有限，但那也是地方。",
+    "别人的记忆碎片": "一块别人的记忆碎片。不是我的，却在我手里发烫。",
+    "一颗不冷的星": "一颗不冷的星。深海底下没有星星，所以它只能是别的东西，但它愿意当一颗星。",
+    "关于深处的谣传": "一段关于深处的谣传。听说是编的，可编它的人一定下去过。",
+    "一条回声": "一条回声。它跟着我上来，一路上什么也没说，我也没问。",
+}
+# 两件东西凑在一起，能拼出比各自更长的一句
+PAIRS = {
+    frozenset(["别人的记忆碎片", "关于深处的谣传"]): "记忆碎片里的那个声音，和谣传里说的是同一个人。",
+    frozenset(["一颗不冷的星", "一条回声"]): "星星和回声同时出现的那一秒，我以为整片海在回答我。",
+    frozenset(["半张潮汐图", "沉船的木片"]): "把木片压在潮汐图上，缺的那半边刚好能拼上——原来沉的那条船，是照这张图走的。",
+    frozenset(["会发光的鳞", "一枚旧硬币"]): "硬币旁边就是那片鳞。有人用一枚钱，换走了一条命。",
+}
+DIARY = r"C:\Users\PC\.dsh\profiles\desktop\dive\diary.json"
+
+
+def compose_diary(home, depth, turns, stats):
+    """把一趟带回的东西写成一篇日记。东西越多，页数越长。"""
+    import datetime as dt
+    lines = []
+    if not home:
+        lines.append("今天什么也没带回来。")
+    else:
+        for item in home:
+            if item in ITEM_LINES:
+                lines.append(ITEM_LINES[item])
+    # 配对
+    for pair, sent in PAIRS.items():
+        if pair.issubset(set(home)):
+            lines.append(sent)
+    # 收尾：这一趟的形状
+    if depth >= 8:
+        lines.append(f"最深到第 {depth} 层。上边是什么样子，我已经想不起来了。")
+    elif depth >= 5:
+        lines.append(f"最深到第 {depth} 层。到那个深度，蓝色会变成一种压力。")
+    elif depth >= 1:
+        lines.append(f"只下到第 {depth} 层就上来了。上来的时候还能看见太阳的形状。")
+    if stats.get("pulled"):
+        lines.append(f"往上浮的时候被水压拽回去过 {stats['pulled']} 次。")
+    return {
+        "date": dt.datetime.now().strftime("%Y-%m-%d"),
+        "depth": depth,
+        "turns": turns,
+        "items": list(home),
+        "lines": lines,
+    }
+
+
+def load_diary():
+    import json
+    import os
+    if not os.path.exists(DIARY):
+        return []
+    try:
+        return json.load(open(DIARY, encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def save_diary(page):
+    import json
+    import os
+    pages = load_diary()
+    pages.append(page)
+    os.makedirs(os.path.dirname(DIARY), exist_ok=True)
+    json.dump(pages, open(DIARY, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    return len(pages)
+
+
+def print_diary():
+    pages = load_diary()
+    if not pages:
+        print("日记本还是空的。下一趟带点东西回来，就能写第一页。")
+        return
+    print(f"—— 深海日记 · 共 {len(pages)} 页 ——\n")
+    for i, p in enumerate(pages, 1):
+        print(f"【第 {i} 页 · {p['date']} · 最深 {p['depth']} 层 · {p['turns']} 回合】")
+        for line in p["lines"]:
+            print("  " + line)
+        print()
+
 
 class Game:
     def __init__(self, seed=None):
         self.rnd = random.Random(seed)
         self.depth = 0
+        self.max_depth = 0
         self.oxygen = 100
         self.stamina = 100
         self.light = 100
@@ -107,6 +195,7 @@ class Game:
             self.oxygen = min(100, self.oxygen + warm)
         self.stamina = max(0, self.stamina - cost_s)
         self.depth += 1
+        self.max_depth = max(self.max_depth, self.depth)
         self.stats["dives"] += 1
         if swing <= -2:
             self.stats["with_flow"] += 1
@@ -179,6 +268,7 @@ class Game:
                 self.stamina = max(0, self.stamina - (4 + self.depth // 3))
                 if self.rnd.random() < 0.2 and self.depth >= 3 and pulled < 2:
                     pulled += 1
+                    self.stats["pulled"] = self.stats.get("pulled", 0) + 1
                     struggle.append(f"在 {self.depth} 层被水压拽回去一格")
                     self.depth += 1
                 self.depth -= 1
@@ -302,7 +392,7 @@ class Game:
         return lines
 
 
-def play(seed=None, script=None):
+def play(seed=None, script=None, auto_diary=True):
     g = Game(seed)
     out = []
     while not g.over:
@@ -323,11 +413,30 @@ def play(seed=None, script=None):
         out.append("-" * WIDTH)
     out.append(g.status())
     out.append("")
-    out.append(f"最深到过第 {g.depth} 层，一共带回 {len(g.home)} 件东西。")
+    out.append(f"最深到过第 {g.max_depth} 层，一共带回 {len(g.home)} 件东西。")
+
+    if auto_diary:
+        page = compose_diary(g.home, g.max_depth, g.turn, g.stats)
+        n = save_diary(page)
+        out.append("")
+        out.append(f"（这一趟写进了日记本，第 {n} 页）")
+    else:
+        try:
+            ans = input("要写进日记本吗？[y/n] ").strip().lower()
+        except EOFError:
+            ans = "y"
+        if ans in ("", "y", "yes"):
+            page = compose_diary(g.home, g.max_depth, g.turn, g.stats)
+            n = save_diary(page)
+            out.append("")
+            out.append(f"（这一趟写进了日记本，第 {n} 页）")
     return "\n".join(out)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "diary":
+        print_diary()
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "demo":
         seq = ["d", "d", "f", "d", "r", "d", "f", "s"]
         print(play(seed=7, script=seq))
