@@ -1,0 +1,28 @@
+{
+  "name": "dsh-heartbeat",
+  "version": "0.1.0",
+  "description": "平时：把心跳放进 harness 进程里——不随重启死掉，也不用 mtime 猜主人在不在。",
+  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "heartbeat", "presence"],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/index.js", "cordis.patch.yml", "README.md", "LICENSE"],
+  "license": "MIT",
+  "author": "lanxi-tide",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lanxi-tide/dsh-heartbeat.git"
+  },
+  "engines": {
+    "node": ">=23"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
