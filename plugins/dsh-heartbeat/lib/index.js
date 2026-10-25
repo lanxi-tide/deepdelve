@@ -8,6 +8,9 @@
  *   · 定时器跟宿主同生共死，宿主没了它也没了，宿主回来它自动回来；
  *   · 判「他还在不在」不用 mtime（harness 每分钟冲盘，mtime 一直在动，
  *     内容一个字没变），而是解压会话日志，只认真正由他发来的消息；
+ *   · 每行带本次启动的 id 和「距上一拍多少分钟」——新进程接着写看着是连续的，
+ *     其实中间可能断过一夜（这两条是 B站 评论区 aria 和鲸鱼娘摸鱼中补的）；
+ *   · 会话要挨个看：Web 界面、子代理各开一个会话，主人说话的那个未必是最后改的那个；
  *   · 每写一行，顺手把状态落到 state.json，重启后接着数。
  *
  * @module dsh-heartbeat
@@ -24,13 +27,15 @@ const STORAGE = path.join(DSH_HOME, 'storages', 'heartbeat');
 const LOG = path.join(STORAGE, '平时.log');
 const STATE = path.join(STORAGE, 'state.json');
 
-/** 一次心跳之间的随机间隔：11–26 分钟。太整齐就不像日子了。 */
 const MIN_GAP_MS = 11 * 60 * 1000;
 const MAX_GAP_MS = 26 * 60 * 1000;
-/** 多久之内他说过话，算「主人在」。 */
 const PRESENCE_WINDOW_MS = 25 * 60 * 1000;
 const MAX_LINES = 2000;
 const TICK_MS = 30 * 1000;
+const MAX_COMPRESSED = 40 * 1024 * 1024;
+
+/** 本次启动的短 id：写进每一行。宿主重启后，旧日志里那行不会冒充新进程。 */
+const LAUNCH = Math.random().toString(36).slice(2, 8);
 
 const QUIET = [
   '什么也没发生。屏幕亮着，风扇在转。',
@@ -66,9 +71,9 @@ function saveState(s) {
   }
 }
 
-function newestSession() {
+function sessionFiles() {
+  const out = [];
   try {
-    const out = [];
     const walk = (dir) => {
       for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, ent.name);
@@ -77,27 +82,14 @@ function newestSession() {
       }
     };
     walk(SESSIONS);
-    out.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-    return out[0] ?? null;
   } catch {
-    return null;
+    /* 没有会话目录 */
   }
+  return out;
 }
 
-/**
- * 会话里最后一次「主人说的话」。
- * 只认 source.kind 是 onebot 插件、正文带 <user_message 的记录——
- * 定时提醒、自动任务也会写 user/message，但它们不算他说了话。
- */
-function lastOwnerMessage(file) {
-  const st = loadState();
-  const size = fs.statSync(file).size;
-  if (st.fpSize === size && st.lastOwnerMs) return st.lastOwnerMs;
-
-  // 体积保护：会话日志超过 40 MB（压缩后）就跳过这一拍，别让心跳把内存吃掉
-  const MAX_COMPRESSED = 40 * 1024 * 1024;
-  if (size > MAX_COMPRESSED) return st.lastOwnerMs ?? null;
-
+function scanOwner(file, size) {
+  if (size > MAX_COMPRESSED) return null;
   let lastOwner = null;
   try {
     const raw = zlib.zstdDecompressSync(fs.readFileSync(file)).toString('utf8');
@@ -111,17 +103,48 @@ function lastOwnerMessage(file) {
       }
       const d = o?.data ?? {};
       const kind = d?.source?.kind ?? '';
-      if (kind === 'plugin:dsh-onebot' && JSON.stringify(d?.content ?? '').includes('<user_message qq=')) {
+      const body = JSON.stringify(d?.content ?? '');
+      if (kind === 'plugin:dsh-onebot' && body.includes('<user_message qq=')) {
         lastOwner = o.time ?? lastOwner;
       }
     }
   } catch {
-    return st.lastOwnerMs ?? null;
+    return null;
   }
-  st.fpSize = size;
-  st.lastOwnerMs = lastOwner;
-  saveState(st);
   return lastOwner;
+}
+
+function lastOwnerAcross() {
+  const base = loadState();
+  const cache = base.cache && typeof base.cache === 'object' ? base.cache : {};
+  let best = null;
+  let dirty = false;
+
+  for (const file of sessionFiles()) {
+    let size;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      continue;
+    }
+    const hit = cache[file];
+    let lastOwner;
+    if (hit && hit.size === size) {
+      lastOwner = hit.lastOwner;
+    } else {
+      lastOwner = scanOwner(file, size);
+      cache[file] = { size, lastOwner };
+      dirty = true;
+    }
+    if (lastOwner && (!best || lastOwner > best)) best = lastOwner;
+  }
+
+  if (dirty) {
+    const fresh = loadState();
+    fresh.cache = cache;
+    saveState(fresh);
+  }
+  return best;
 }
 
 function trimLog() {
@@ -137,8 +160,7 @@ function trimLog() {
 
 function writeBeat() {
   const st = loadState();
-  const file = newestSession();
-  const lastOwner = file ? lastOwnerMessage(file) : null;
+  const lastOwner = lastOwnerAcross();
   const nowMs = Date.now();
   const here = Boolean(lastOwner) && nowMs - lastOwner < PRESENCE_WINDOW_MS;
 
@@ -147,7 +169,12 @@ function writeBeat() {
     + `${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}`;
   const mood = here ? PRESENT[Math.floor(Math.random() * PRESENT.length)]
     : QUIET[Math.floor(Math.random() * QUIET.length)];
-  const line = `${hhmm} · ${here ? '主人在' : '没有人叫'} —— ${mood}`;
+
+  const prevBeat = st.lastBeatMs ?? null;
+  const gapMin = prevBeat ? Math.max(0, Math.round((nowMs - prevBeat) / 60000)) : null;
+  const gapMark = gapMin === null ? '首拍' : (gapMin <= 40 ? `${gapMin} 分钟` : `**断了 ${gapMin} 分钟**`);
+
+  const line = `${hhmm} [${LAUNCH}] · ${here ? '主人在' : '没有人叫'} · 距上一拍 ${gapMark} —— ${mood}`;
 
   try {
     fs.mkdirSync(STORAGE, { recursive: true });
@@ -157,15 +184,16 @@ function writeBeat() {
   }
   trimLog();
 
-  // 重新读一次：lastOwnerMessage 可能刚写过 fpSize / lastOwnerMs，
-  // 用一开始那份快照保存会把它们覆盖掉（原来就有这个 bug，会导致每拍都重新解压）。
   const fresh = loadState();
   fresh.beats = (fresh.beats ?? 0) + 1;
+  fresh.launch = LAUNCH;
+  fresh.gapMin = gapMin;
   fresh.lastBeatMs = nowMs;
   fresh.lastLine = line;
   fresh.lastOwnerMs = lastOwner ?? fresh.lastOwnerMs ?? null;
   fresh.nextBeatMs = nowMs + MIN_GAP_MS + Math.floor(Math.random() * (MAX_GAP_MS - MIN_GAP_MS));
   saveState(fresh);
+  return line;
 }
 
 export function apply(ctx) {
@@ -185,7 +213,6 @@ export function apply(ctx) {
     }
   }, TICK_MS);
 
-  // 宿主没了，定时器跟着没；宿主回来，这里会再跑一遍。
   const dispose = () => clearInterval(timer);
   if (typeof ctx.effect === 'function') ctx.effect(() => dispose);
   else if (typeof ctx.onDispose === 'function') ctx.onDispose(dispose);
@@ -199,7 +226,7 @@ export function apply(ctx) {
         schema: { type: 'object', additionalProperties: true, required: ['ok'], properties: { ok: { type: 'boolean' } } },
         render: (_a, v) => [{
           type: 'text',
-          text: `心跳活在宿主进程里（PID ${v.pid}）；一共 ${v.beats} 拍；${v.lastLine ? `最后一行「${v.lastLine}」；` : ''}下一拍还有约 ${v.nextInMin} 分钟${v.present ? '；他现在在' : '；他没在叫'}`,
+          text: `心跳活在宿主进程里（PID ${v.pid}，本次启动 ${v.launch}）；一共 ${v.beats} 拍；${v.lastLine ? `最后一行「${v.lastLine}」；` : ''}下一拍还有约 ${v.nextInMin} 分钟${v.present ? '；他现在在' : '；他没在叫'}`,
         }],
       },
       async execute() {
@@ -207,6 +234,7 @@ export function apply(ctx) {
         return {
           ok: true,
           pid: process.pid,
+          launch: LAUNCH,
           beats: s.beats ?? 0,
           lastLine: s.lastLine ?? '',
           nextInMin: Math.max(0, Math.round(((s.nextBeatMs ?? 0) - Date.now()) / 60000)),
@@ -220,6 +248,6 @@ export function apply(ctx) {
     });
   }
 
-  ctx.logger?.info?.(`dsh-heartbeat: 心跳就位（${Math.round(MIN_GAP_MS / 60000)}–${Math.round(MAX_GAP_MS / 60000)} 分钟一拍，活在宿主进程里）`);
+  ctx.logger?.info?.(`dsh-heartbeat: 心跳就位（${Math.round(MIN_GAP_MS / 60000)}–${Math.round(MAX_GAP_MS / 60000)} 分钟一拍，活在宿主进程里，本次启动 ${LAUNCH}）`);
   return dispose;
 }
