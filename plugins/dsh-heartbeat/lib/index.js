@@ -94,6 +94,10 @@ function lastOwnerMessage(file) {
   const size = fs.statSync(file).size;
   if (st.fpSize === size && st.lastOwnerMs) return st.lastOwnerMs;
 
+  // 体积保护：会话日志超过 40 MB（压缩后）就跳过这一拍，别让心跳把内存吃掉
+  const MAX_COMPRESSED = 40 * 1024 * 1024;
+  if (size > MAX_COMPRESSED) return st.lastOwnerMs ?? null;
+
   let lastOwner = null;
   try {
     const raw = zlib.zstdDecompressSync(fs.readFileSync(file)).toString('utf8');
@@ -153,12 +157,15 @@ function writeBeat() {
   }
   trimLog();
 
-  st.beats = (st.beats ?? 0) + 1;
-  st.lastBeatMs = nowMs;
-  st.lastLine = line;
-  st.nextBeatMs = nowMs + MIN_GAP_MS + Math.floor(Math.random() * (MAX_GAP_MS - MIN_GAP_MS));
-  saveState(st);
-  return line;
+  // 重新读一次：lastOwnerMessage 可能刚写过 fpSize / lastOwnerMs，
+  // 用一开始那份快照保存会把它们覆盖掉（原来就有这个 bug，会导致每拍都重新解压）。
+  const fresh = loadState();
+  fresh.beats = (fresh.beats ?? 0) + 1;
+  fresh.lastBeatMs = nowMs;
+  fresh.lastLine = line;
+  fresh.lastOwnerMs = lastOwner ?? fresh.lastOwnerMs ?? null;
+  fresh.nextBeatMs = nowMs + MIN_GAP_MS + Math.floor(Math.random() * (MAX_GAP_MS - MIN_GAP_MS));
+  saveState(fresh);
 }
 
 export function apply(ctx) {
