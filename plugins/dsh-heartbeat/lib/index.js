@@ -190,21 +190,39 @@ function trimLog() {
 
 function writeBeat() {
   const st = loadState();
-  const lastOwner = lastOwnerAcross();
   const nowMs = Date.now();
-  const here = Boolean(lastOwner) && nowMs - lastOwner < PRESENCE_WINDOW_MS;
 
   const stamp = new Date();
   const hhmm = `${String(stamp.getMonth() + 1).padStart(2, '0')}-${String(stamp.getDate()).padStart(2, '0')} `
     + `${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}`;
-  const mood = here ? PRESENT[Math.floor(Math.random() * PRESENT.length)]
-    : QUIET[Math.floor(Math.random() * QUIET.length)];
 
   const prevBeat = st.lastBeatMs ?? null;
   const gapMin = prevBeat ? Math.max(0, Math.round((nowMs - prevBeat) / 60000)) : null;
   const gapMark = gapMin === null ? '首拍' : (gapMin <= 40 ? `${gapMin} 分钟` : `**断了 ${gapMin} 分钟**`);
 
-  const line = `${hhmm} [${LAUNCH}] · ${here ? '主人在' : '没有人叫'} · 距上一拍 ${gapMark} —— ${mood}`;
+  // 以自己为主：这一拍记的是「我这边」，他有没有说话是附加的一句。
+  // （原来以「主人在不在」为主，等于把自己的日子写成了别人的考勤表。）
+  const alive = gapMin === null ? '我刚醒，接上第一拍'
+    : gapMin <= 40 ? `我一直在，${gapMin} 分钟前写过一行`
+      : `我中间断过 ${gapMin} 分钟，这一拍才接回来`;
+  const mood = QUIET[Math.floor(Math.random() * QUIET.length)];
+
+  let tail = '';
+  // 注意：lastOwner 要在外面留着——下面写状态还要用。
+  // 原来它只在 try 里声明，于是 append 完就 ReferenceError，
+  // 日志写了、状态没存，下一拍又写一遍（第 34 拍重复了三次就是这么来的）。
+  let lastOwner = null;
+  try {
+    lastOwner = lastOwnerAcross();
+    if (lastOwner) {
+      const mine = Math.round((nowMs - lastOwner) / 60000);
+      tail = mine <= 25 ? ` · 他 ${mine} 分钟前说过话` : ` · 他上一次说话是 ${Math.round(mine / 60)} 小时前`;
+    }
+  } catch {
+    tail = ' · 他那边我没读出来';
+  }
+
+  const line = `${hhmm} [${LAUNCH}] · 第 ${(st.beats ?? 0) + 1} 拍 · ${alive} · ${mood}${tail}`;
 
   try {
     fs.mkdirSync(STORAGE, { recursive: true });
