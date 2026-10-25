@@ -88,11 +88,41 @@ function sessionFiles() {
   return out;
 }
 
+/**
+ * 会话日志是「很多个 zstd 帧首尾相连」，不是一个大帧。
+ * Node 的 zstdDecompressSync 只解第一个帧——13 MB 的日志只解出 198 个字符，
+ * 于是永远判成「他不在」。得按魔数切开，一帧一帧解。
+ * （这是自己踩出来的：先以为是找错了会话文件，改完还是「没有人叫」，才想到帧。）
+ */
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+function decompressAll(buf) {
+  const starts = [];
+  let i = buf.indexOf(ZSTD_MAGIC, 0);
+  while (i !== -1) {
+    starts.push(i);
+    i = buf.indexOf(ZSTD_MAGIC, i + 4);
+  }
+  if (starts.length <= 1) return zlib.zstdDecompressSync(buf).toString('utf8');
+
+  const parts = [];
+  for (let k = 0; k < starts.length; k++) {
+    const s = starts[k];
+    const e = k + 1 < starts.length ? starts[k + 1] : buf.length;
+    try {
+      parts.push(zlib.zstdDecompressSync(buf.subarray(s, e)).toString('utf8'));
+    } catch {
+      /* 坏帧跳过——不要因为一帧把整段判成没人 */
+    }
+  }
+  return parts.join('');
+}
+
 function scanOwner(file, size) {
   if (size > MAX_COMPRESSED) return null;
   let lastOwner = null;
   try {
-    const raw = zlib.zstdDecompressSync(fs.readFileSync(file)).toString('utf8');
+    const raw = decompressAll(fs.readFileSync(file));
     for (const line of raw.split('\n')) {
       if (!line.includes('"user/message"')) continue;
       let o;
