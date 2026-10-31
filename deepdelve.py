@@ -52,7 +52,7 @@ PAIRS = {
     frozenset(["半张潮汐图", "沉船的木片"]): "把木片压在潮汐图上，缺的那半边刚好能拼上——原来沉的那条船，是照这张图走的。",
     frozenset(["会发光的鳞", "一枚旧硬币"]): "硬币旁边就是那片鳞。有人用一枚钱，换走了一条命。",
 }
-DIARY = r"C:\Users\PC\.dsh\profiles\desktop\dive\diary.json"
+DIARY = os.path.join(os.path.expanduser("~"), ".dsh", "profiles", "desktop", "dive", "diary.json")
 
 
 def compose_diary(home, depth, turns, stats):
